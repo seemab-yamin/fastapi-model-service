@@ -53,4 +53,34 @@ these tests and the fakes to match. If you change the pipeline in
 Do not add a real .onnx file to the repo to make tests pass.
 
 ## CI behavior with no model
-(added in point 5)
+The workflow in `.github/workflows/ci.yml` is green on a fresh repo and turns
+on more stages as you configure it. Set these under Settings > Secrets and
+variables > Actions:
+
+| Name | Kind | Purpose |
+|---|---|---|
+| `MODEL_URL` | repository variable | Direct download link to the `.onnx` file |
+| `DOCKERHUB_USERNAME` | secret | Registry username |
+| `DOCKERHUB_TOKEN` | secret | Registry access token |
+
+What runs:
+1. Nothing configured: unit tests only. Every other step is skipped and the run is green.
+2. `MODEL_URL` set: CI downloads the model to `model.path` from `config.yaml`
+   (it must be under `models/`), builds the image, starts it, waits for `/ping`,
+   and runs `tests/integration`. Push is skipped.
+3. All three set, push to `main`: everything above, then the image is pushed
+   with the commit SHA tag and `latest`. Pull requests never push.
+
+`MODEL_URL` must be a direct file link, such as a GitHub release asset or a
+Hugging Face `resolve/main/...` URL. A web page link downloads HTML, and the
+download step fails with a message naming `MODEL_URL`. A file that downloads but is
+not a valid model fails at the `/ping` wait, and the log prints `/health` with
+`setup_errors` that say what is wrong.
+
+Reading the job summary: open the run, then the summary at the top of the
+page. It shows a table with each stage's result and one line for each skipped
+stage that names exactly what to configure. After a push it shows the pushed
+image reference. Deploy the SHA tag, not `latest`.
+
+The integration tests only check the endpoints and response shape, not
+specific detections, because the template cannot know what your model finds.

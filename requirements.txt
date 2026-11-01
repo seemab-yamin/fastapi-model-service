@@ -1,12 +1,8 @@
-pyyaml
 fastapi
 uvicorn
-pytest
+python-multipart
 pydantic>=2
-httpx
+pyyaml
 onnxruntime
 numpy
-torch
 pillow
-python-multipart
-requests

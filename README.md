@@ -18,10 +18,10 @@ The template ships with a stock YOLOv8s object detector so it works with zero ed
 ## Quick start
 
 1. Click **Use this template** on GitHub and name your new repo.
-2. Clone it and install dependencies:
+2. Clone it and install dependencies (`requirements-dev.txt` adds the test tools):
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 3. Run the server:
@@ -136,19 +136,28 @@ When you hit a new class of failure, add a general pattern to `references/failur
 
 ## CI/CD
 
-On every push to `main` the workflow:
+The workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request:
 
-1. Installs dependencies and runs unit tests
-2. Downloads model weights and builds the Docker image
-3. Starts the container and runs integration tests against it
-4. Pushes the image to the registry, tagged with the commit SHA and `latest`
+1. Installs dependencies and runs unit tests (always)
+2. Downloads the model from `MODEL_URL` to `model.path` in `config.yaml`, and builds the Docker image
+3. Starts the container, waits for `/ping`, and runs integration tests against it
+4. Pushes the image to Docker Hub, tagged with the commit SHA and `latest` (push to `main` only, never on pull requests)
 
-Required GitHub secrets:
+Configure it under **Settings > Secrets and variables > Actions**:
 
-| Secret | Value |
+| Name | Kind | Value |
+|---|---|---|
+| `MODEL_URL` | repository variable | Direct download link to the `.onnx` file (a GitHub release asset or a Hugging Face `resolve/main/...` URL, not a web page) |
+| `DOCKERHUB_USERNAME` | secret | Your registry username |
+| `DOCKERHUB_TOKEN` | secret | A registry access token |
+
+| Configured | What runs |
 |---|---|
-| `DOCKERHUB_USERNAME` | Your registry username |
-| `DOCKERHUB_TOKEN` | A registry access token |
+| Nothing | Unit tests only. The run is green and the job summary says what to set. |
+| `MODEL_URL` | Unit tests, download, build, integration tests. Push is skipped. |
+| All three, push to `main` | Everything, and the image is pushed as `<username>/<repo>:<sha>` and `:latest`. |
+
+Models are never committed to git. The job summary lists each stage's result and why any stage was skipped.
 
 CI stops once the image is pushed. Deploying to a platform is a per-project step.
 
