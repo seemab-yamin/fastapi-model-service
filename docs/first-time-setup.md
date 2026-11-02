@@ -1,12 +1,16 @@
 # First-time setup
 
-The template starts with no model. It runs, but `/ping` returns 503 and
-`/health` lists what is missing. Complete this checklist first.
+Models are not committed to git, so a fresh checkout has no model file. The
+app still runs, but `/ping` and `/predict` return 503 and `/health` lists what
+is missing in `setup_errors`. Complete this checklist first.
 
 ## Checklist
-1. Put your `.onnx` file in `models/`.
-2. Edit `config.yaml`: `model.path`, `model.url`, `model.labels`,
-   `model.input_size`, `model.channel_order`, `model.normalize`.
+1. Edit `config.yaml`: `model.path` (must be under `models/`), `model.url`
+   (a direct link to the `.onnx` file), `model.labels`, `model.input_size`,
+   `model.channel_order`, `model.normalize`.
+2. Locally, download the file to `model.path`, for example
+   `curl -fL -o models/yolov8n.onnx <model.url>`. In CI, the workflow
+   downloads `model.url` with `wget` for you.
 3. If your detector's output layout differs from YOLOv8 (cx, cy, w, h plus
    class scores, shape (1, 4+classes, N)), edit
    app/pipeline/detection/postprocess.py. If its input handling differs
@@ -22,6 +26,8 @@ When a design choice is open, follow the most common convention in the field.
 3. Add the task name to the `task` Literal in app/config.py.
 4. Set `model.task` in config.yaml.
 5. Add unit tests that feed fake arrays and check the output.
+6. If the result shape differs from detections, add response models in
+   `app/schemas/` and a router in `app/routers/`.
 The runtime in app/services/onnx_runtime.py is task-agnostic. Do not edit it for a new task.
 
 ## Detection layouts not covered by the reference
