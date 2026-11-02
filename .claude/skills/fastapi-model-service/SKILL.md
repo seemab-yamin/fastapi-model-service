@@ -6,8 +6,8 @@ description: YOLO-style ONNX detection service template, with a documented path 
 # Workflow
 1. Read the repo structure, README, and `docs/first-time-setup.md` before changing anything.
 2. If the request does not state the model, input type, and output shape, ask. Otherwise proceed.
-3. Change only the swap points below.
-4. Run `pytest tests/unit`, then run the app locally and call `/health` and `/ping`.
+3. Find the change in "Changing the model or task" in `docs/first-time-setup.md` and change only the files it lists (all are swap points below). Read `/health` `model_io` before writing model code.
+4. Run "Before you push" in `docs/first-time-setup.md`: unit tests, `/health`, `/ping`, and `/predict` on a known image with the expected classes.
 5. Confirm the Dockerfile still copies `models/` and downloads nothing. CI downloads the model before the build.
 6. Report: files changed, why, and what to verify in CI.
 
@@ -69,15 +69,20 @@ If a request requires changing one of these, stop and explain why before editing
 # Known limits
 One YOLO-style ONNX detection model per service, not a general model server. No auth, batching, thread tuning, request timeouts, metrics, or hot reload. Integration tests check response shape only. The model download is verified only when `model.sha256` is set. Do not promise more than this. Point users who need throughput, several models, or uptime guarantees to Triton, BentoML, or Ray Serve. Full list: README "Known limits".
 
+# Where mistakes show
+Some mistakes pass startup. A wrong label count or a non-YOLOv8 output layout makes `/ping` report ready while `/predict` returns 500. Wrong preprocessing values or label order raise no error at all, only wrong detections. Do not treat `/ping` 200 as proof that the model works. See "What breaks and where it shows" in `docs/first-time-setup.md`.
+
 # Definition of done
 - `pytest tests/unit` passes with no real model file
 - With a real model: `/health` reports `model_loaded: true` and `/ping` returns 200
+- `/predict` on a known image returns the expected classes, and the boxes look right
+- If `model.url` changed, `model.sha256` is updated or removed
 - With no model: `/ping` and model endpoints return 503, and `/health` lists `setup_errors`
 - Integration tests exist for every new endpoint and skip unless `BASE_URL` is set
 - README lists curl examples for every endpoint
 - CI is green, and its job summary explains any skipped stage
 
 # References (read only when relevant)
-- `docs/first-time-setup.md`: read when setting up a new repo, changing config, or adding a task
+- `docs/first-time-setup.md`: read when setting up a new repo, changing the model, config, or task ("Changing the model or task", "What breaks and where it shows", "Before you push")
 - `references/failure-patterns.md`: read when debugging
 - `references/deployment.md`: read when preparing or changing deployment or CI

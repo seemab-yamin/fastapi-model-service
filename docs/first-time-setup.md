@@ -26,14 +26,44 @@ is missing in `setup_errors`. Complete this checklist first.
 ## Design rule
 When a design choice is open, follow the most common convention in the field.
 
+## Changing the model or task
+Find your change in the table, edit only the files listed, then run "Before
+you push" below. Read `/health` `model_io` first: it shows the model's real
+input and output names and shapes.
+
+| Change | Edit | Watch out for |
+|---|---|---|
+| Another YOLOv8-layout export (different classes or size) | `config.yaml`: `path`, `url`, `sha256`, `labels`, `input_size` (dynamic inputs only) | Label count and order must match the model. Update or remove `sha256` whenever `url` changes |
+| Same layout, different input handling | `config.yaml`: `channel_order`, `normalize`, `mean`, `std` | Wrong values give no error, only poor detections |
+| Different resize (no letterbox, crop) | `app/pipeline/detection/preprocess.py` | The context must still map boxes back to original-image pixels |
+| Different output layout (DETR, SSD, YOLOv5, NMS built in) | `postprocess.py`, and `app/pipeline/detection/__init__.py` if the model has several outputs | Keep the output dicts: `class_id`, `class`, `confidence`, `bbox` as `[x1, y1, x2, y2]` |
+| Several model inputs (for example image plus original size) | The pipeline class builds the feed dict | The runtime already handles several inputs and casts dtypes |
+| GPU | `inference.providers`, and `onnxruntime-gpu` instead of `onnxruntime` | A GPU Docker image changes the base image, which needs approval. Without a visible GPU the service warns and runs on CPU |
+| A new config key | `app/config.py` (field with type and limits) and a comment in `config.yaml` | Unknown keys are rejected, so a key added only to `config.yaml` stops the service |
+| A different task | See "Adding a new task" | The `/predict` response and its tests are detection-specific |
+
 ## Adding a new task (NLP, tabular, other)
 1. Create app/pipeline/<task>/ with a Pipeline subclass (see app/pipeline/base.py).
+   `preprocess` returns the feed dict and a context. `postprocess` returns
+   plain dicts and lists only (no numpy types).
 2. Register it in app/pipeline/__init__.py.
-3. Add the task name to the `task` Literal in app/config.py.
+3. Add the task name to the `task` Literal in app/config.py, and any new
+   settings (for example `top_k`) as fields there.
 4. Set `model.task` in config.yaml.
 5. Add unit tests that feed fake arrays and check the output.
-6. If the result shape differs from detections, add response models in
-   `app/schemas/` and a router in `app/routers/`.
+6. Add response models in `app/schemas/` and a router in `app/routers/`.
+   `/predict` and `PredictResponse` are detection-specific: give the new task
+   its own route, or make the route pick the response model by task. Keep the
+   503-with-`setup_errors` check and a plain `def` route.
+7. Non-image inputs (text, tables): use a JSON request body and your own
+   validation. `app/utils/image_utils.py` is for images only.
+8. Extra files the model needs (tokenizer, vocabulary) must live in
+   `models/` or `app/`. `.dockerignore` keeps everything else out of the
+   image, and CI only downloads `model.url`. New dependencies go in
+   `requirements.txt` (runtime) or `requirements-dev.txt` (tests).
+9. Update `tests/unit/test_predict.py` and `tests/integration/` for the new
+   response, and the README endpoint docs. `optional/annotate/` works for
+   detection only.
 The runtime in app/services/onnx_runtime.py is task-agnostic. A new task or
 model never needs to edit it. Runtime-wide changes that help every model
 (execution providers, GPU fallback, session options) are fine.
@@ -54,8 +84,9 @@ built in.
 2. `config.yaml`: set `model.path`, `model.url`, `input_size`, and
    `model.labels`. The label count must match the class dimension. RF-DETR's
    91 logits are indexed by COCO category id, so the list starts with
-   `__background__` and has `N/A` for unused ids. The pipeline reports a
-   mismatch in `setup_errors`. Set `confidence_threshold: 0.5`, the RF-DETR
+   `__background__` and has `N/A` for unused ids. A wrong count passes
+   startup: the first `/predict` returns 500 naming both counts (see "What
+   breaks and where it shows"). Set `confidence_threshold: 0.5`, the RF-DETR
    default.
 3. `preprocess.py`: plain resize to the input size (no letterbox), RGB,
    divide by 255, then ImageNet mean `[0.485, 0.456, 0.406]` and std
@@ -90,6 +121,41 @@ See comments in `config.yaml`. Unknown keys are rejected on purpose.
   lacks are skipped with a warning, and CPU is always the fallback.
   `/health` `model_io` shows the active and requested providers.
 - `inference.max_upload_mb` (int, default 10): `/predict` rejects larger uploads with 413.
+
+## What breaks and where it shows
+Mistakes show up in four places. The later a mistake shows, the more
+carefully you need to check for it.
+
+| Where it shows | Mistakes | What you see |
+|---|---|---|
+| Startup | Missing or invalid `config.yaml`; unknown key; invalid value (`model.path` not `.onnx`, threshold out of range, bad `url`, `sha256`, `mean` or `std`); model file missing; file is not a valid ONNX model; unsupported input dtype; more than one model input; input not a 4D, 3-channel image | Listed in `/health` `setup_errors`. `/ping` and `/predict` return 503 with the same list |
+| First request | Label count does not match the model's classes; output layout is not YOLOv8 `(1, 4+classes, N)` | `/ping` says ready, then `/predict` returns 500 with a message saying what to fix. Any other inference failure returns a generic 500, with the traceback in the server log |
+| CI | Download fails; file under 1 KB or an HTML page; checksum mismatch; `model.path` outside `models/`; malformed `MODEL_SHA256`; container never ready; any first-request error above | The step fails with an `::error::` message. The `/ping` wait prints `/health`, and the integration tests fail on a `/predict` 500 |
+| Never (silent) | Wrong `channel_order`, `normalize`, `mean`, `std`, resize method, or `input_size` for a dynamic model; labels in the wrong order; `confidence_threshold` too high (no detections) or too low (noise) | No error. Detections are wrong, missing, or mislabeled |
+
+Not errors, but worth knowing:
+- A provider this ONNX Runtime build lacks (for example CUDA on `onnxruntime`) is
+  skipped with a log warning, and the service runs on CPU. Check
+  `/health` `model_io` `providers`.
+- A model with a fixed input size ignores `model.input_size`, with a log message.
+- Code or files outside `app/`, `config.yaml` and `models/` are not in the
+  Docker image. It works locally but fails in the container.
+
+## Before you push
+Run these after any model, config, or pipeline change. Together they cover
+every row above except the silent one, which only step 4 catches.
+
+1. `pytest tests/unit -v` passes, with no model file needed.
+2. Start the app with the real model. `/health` shows `model_loaded: true`,
+   empty `setup_errors`, and the `model_io` you expect.
+3. `/ping` returns 200.
+4. `curl -F "file=@data/sample/bus.jpg" localhost:8000/predict` returns 200
+   with the classes you expect, at sensible confidences. Look at the boxes
+   with `optional/annotate/` to catch silent preprocessing mistakes.
+5. If you changed `model.url`, update `model.sha256`
+   (`shasum -a 256 models/<file>.onnx`) or remove it.
+6. Push, and read the CI job summary. Every stage should pass, with
+   "Checksum verified" when `model.sha256` is set.
 
 ## Calling /predict
 ```bash

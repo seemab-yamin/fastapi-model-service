@@ -169,6 +169,8 @@ Change only these:
 
 Check `/health` `model_io` to see the model's real input and output shapes. For a new task type (NLP, tabular), see "Adding a new task" in `docs/first-time-setup.md`.
 
+Before any change, find it in "Changing the model or task" in `docs/first-time-setup.md`, and afterwards run its "Before you push" checklist. Some mistakes pass startup, and some raise no error at all. "What breaks and where it shows" lists them.
+
 Do not change the lifespan loading, the setup-errors flow, the readiness logic, or the workflow step order unless you have a clear reason. `app/services/onnx_runtime.py` stays task-agnostic: model-specific code goes in the pipeline, while runtime-wide changes (execution providers, GPU fallback) are fine.
 
 ## Optional features
