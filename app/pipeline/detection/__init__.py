@@ -22,6 +22,8 @@ class DetectionPipeline(Pipeline):
             self.spec.layout,
             self.model_cfg.channel_order,
             self.model_cfg.normalize,
+            self.model_cfg.mean,
+            self.model_cfg.std,
         )
         return {self.spec.name: tensor}, ctx
 

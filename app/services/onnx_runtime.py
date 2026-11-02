@@ -41,10 +41,17 @@ def _spec(meta, strict: bool) -> TensorSpec:
 class OnnxModel:
     """Thin wrapper over an ONNX Runtime session. It knows nothing about tasks."""
 
-    def __init__(self, session, inputs: list[TensorSpec], outputs: list[TensorSpec]):
+    def __init__(
+        self,
+        session,
+        inputs: list[TensorSpec],
+        outputs: list[TensorSpec],
+        requested_providers: list[str] | None = None,
+    ):
         self.session = session
         self.inputs = inputs
         self.outputs = outputs
+        self.requested_providers = requested_providers
 
     def run(self, feed: dict[str, np.ndarray]) -> list[np.ndarray]:
         expected = {s.name for s in self.inputs}
@@ -69,23 +76,35 @@ class OnnxModel:
                 for s in self.inputs
             ],
             "outputs": [{"name": s.name, "shape": list(s.shape)} for s in self.outputs],
+            # active providers; requested shows what config asked for before fallback
             "providers": self.session.get_providers(),
+            "requested_providers": self.requested_providers,
         }
 
 
+def resolve_providers(requested: list[str], available: list[str]) -> list[str]:
+    """Keep the requested providers this ONNX Runtime build has, in order.
+    CPU is the last resort, so a missing GPU never stops the service."""
+    providers = [p for p in requested if p in available]
+    skipped = [p for p in requested if p not in available]
+    if skipped:
+        logger.warning(
+            "Providers not in this ONNX Runtime build, skipping: %s. Available: %s. "
+            "For GPU, install onnxruntime-gpu instead of onnxruntime.",
+            skipped,
+            available,
+        )
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
+    return providers
+
+
 def load_model(model_cfg, inference_cfg) -> OnnxModel:
-    available = ort.get_available_providers()
-    missing = [p for p in inference_cfg.providers if p not in available]
-    if missing:
-        raise ModelLoadError(
-            f"Providers not available: {missing}. Available here: {available}. "
-            "For GPU, install onnxruntime-gpu instead of onnxruntime, "
-            "or set inference.providers to [CPUExecutionProvider] in config.yaml."
-        )
+    providers = resolve_providers(
+        list(inference_cfg.providers), ort.get_available_providers()
+    )
     try:
-        session = ort.InferenceSession(
-            str(model_cfg.path), providers=inference_cfg.providers
-        )
+        session = ort.InferenceSession(str(model_cfg.path), providers=providers)
     except Exception as e:
         raise ModelLoadError(
             f"Could not load {model_cfg.path} as an ONNX model: {e}"
@@ -93,4 +112,8 @@ def load_model(model_cfg, inference_cfg) -> OnnxModel:
 
     inputs = [_spec(m, strict=True) for m in session.get_inputs()]
     outputs = [_spec(m, strict=False) for m in session.get_outputs()]
-    return OnnxModel(session, inputs, outputs)
+    active = session.get_providers()
+    if active[:1] != providers[:1]:
+        # e.g. onnxruntime-gpu with no visible GPU: ONNX Runtime drops CUDA at session start
+        logger.warning("Wanted %s first, running on %s.", providers[0], active)
+    return OnnxModel(session, inputs, outputs, list(inference_cfg.providers))

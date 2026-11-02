@@ -1,8 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter(tags=["Health"])
+
+
+def _utc_now() -> str:
+    # same format as before: ISO 8601 with a trailing Z
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @router.get("/health")
@@ -14,7 +19,7 @@ def health_check(request: Request):
         "model_path": str(s.settings.model.path) if s.settings else None,
         "model_io": s.model.info() if s.model else None,
         "setup_errors": s.setup_errors,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _utc_now(),
     }
 
 
@@ -25,5 +30,5 @@ def ping(request: Request):
         raise HTTPException(status_code=503, detail="Not ready. See /health.")
     return {
         "status": "ok",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _utc_now(),
     }
