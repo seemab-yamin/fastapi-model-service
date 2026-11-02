@@ -42,10 +42,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -58,22 +58,32 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
           pytest tests/unit -v
 
-      # Reads model.url and model.path from config.yaml. The MODEL_URL
-      # repository variable, when set, overrides model.url.
+      # Reads model.url, model.sha256 and model.path from config.yaml. The
+      # MODEL_URL and MODEL_SHA256 repository variables, when set, override them.
+      # The checksum follows the URL: a URL from the variable uses MODEL_SHA256.
       - name: Resolve model
         id: model
         env:
           MODEL_URL_OVERRIDE: ${{ vars.MODEL_URL }}
+          MODEL_SHA256_OVERRIDE: ${{ vars.MODEL_SHA256 }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os, sys, urllib.parse, yaml
+          import os, re, sys, urllib.parse, yaml
 
           model = (yaml.safe_load(open("config.yaml")) or {}).get("model") or {}
           path = str(model.get("path", "models/model.onnx"))
           override = os.environ.get("MODEL_URL_OVERRIDE", "").strip()
           url = override or str(model.get("url") or "").strip()
           source = "repository variable MODEL_URL" if override else "model.url in config.yaml"
+          sha_override = os.environ.get("MODEL_SHA256_OVERRIDE", "").strip()
+          if override:
+              sha, sha_source = sha_override, "repository variable MODEL_SHA256"
+          else:
+              sha, sha_source = str(model.get("sha256") or "").strip(), "model.sha256 in config.yaml"
+              if sha_override:
+                  print("::warning::MODEL_SHA256 is ignored because the URL comes from config.yaml. "
+                        "Set model.sha256 there, or set MODEL_URL too.")
 
           with open(os.environ["GITHUB_ENV"], "a") as env:
               if not url:
@@ -86,8 +96,12 @@ jobs:
               if not path.startswith("models/"):
                   sys.exit(f"::error::model.path in config.yaml is '{path}'. The Dockerfile "
                            "only copies models/, so model.path must start with models/.")
+              if sha and not re.fullmatch(r"[0-9a-fA-F]{64}", sha):
+                  sys.exit(f"::error::{sha_source} must be a 64-character hex SHA-256.")
               env.write(f"HAS_MODEL=true\nMODEL_PATH={path}\nMODEL_URL={url}\nMODEL_SOURCE={source}\n")
+              env.write(f"EXPECTED_SHA256={sha.lower()}\nSHA256_SOURCE={sha_source}\n")
           print(f"Model {path} from {source} (host {urllib.parse.urlparse(url).hostname or 'invalid URL'})")
+          print(f"Checksum: {sha_source}" if sha else "Checksum: not set, the file will not be verified")
           PY
 
       - name: Download model
@@ -113,6 +127,18 @@ jobs:
             exit 1
           fi
           echo "Model downloaded: $SIZE bytes"
+
+          ACTUAL_SHA256=$(sha256sum "$MODEL_PATH" | cut -d' ' -f1)
+          echo "SHA-256: $ACTUAL_SHA256"
+          if [ -z "$EXPECTED_SHA256" ]; then
+            echo "CHECKSUM=not set" >> "$GITHUB_ENV"
+          elif [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ]; then
+            echo "Checksum verified against $SHA256_SOURCE"
+            echo "CHECKSUM=verified" >> "$GITHUB_ENV"
+          else
+            echo "::error::Model checksum mismatch. Expected $EXPECTED_SHA256 ($SHA256_SOURCE), got $ACTUAL_SHA256. The file at the URL changed, or the checksum is wrong. Update $SHA256_SOURCE only if you trust the new file."
+            exit 1
+          fi
 
       - name: Build image
         id: build
@@ -217,6 +243,11 @@ jobs:
             HAS_MODEL="${HAS_MODEL:-false}"
             if [ "$HAS_MODEL" = "true" ]; then
               echo "- Model: \`$MODEL_PATH\` from $MODEL_SOURCE."
+              if [ "${CHECKSUM:-}" = "verified" ]; then
+                echo "- Checksum verified against $SHA256_SOURCE."
+              elif [ "${CHECKSUM:-}" = "not set" ]; then
+                echo "- Checksum not set: set model.sha256 in config.yaml to pin the model file."
+              fi
             elif [ "${MODEL:-}" = "success" ]; then
               echo "- Build and integration tests skipped: model.url is not set in config.yaml. Set it to a direct download link to your .onnx file."
             fi

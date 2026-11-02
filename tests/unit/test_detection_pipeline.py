@@ -128,3 +128,17 @@ def test_labels_count_mismatch():
 def test_nms_keeps_highest_score():
     boxes = np.array([[0, 0, 10, 10], [1, 1, 11, 11]], dtype=np.float32)
     assert nms(boxes, np.array([0.5, 0.9]), 0.45) == [1]
+
+
+def test_to_tensor_applies_mean_std():
+    canvas = np.full((2, 2, 3), 255, dtype=np.uint8)
+    out = to_tensor(canvas, "NCHW", "RGB", True, (0.5, 0.5, 0.5), (0.25, 0.5, 1.0))
+    assert out[0, :, 0, 0] == pytest.approx([2.0, 1.0, 0.5])
+
+
+def test_to_tensor_without_mean_std_is_unchanged():
+    canvas = np.random.default_rng(0).integers(0, 256, (4, 5, 3), dtype=np.uint8)
+    np.testing.assert_array_equal(
+        to_tensor(canvas, "NCHW", "RGB", True),
+        to_tensor(canvas, "NCHW", "RGB", True, None, None),
+    )

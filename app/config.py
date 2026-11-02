@@ -26,11 +26,23 @@ class _Section(BaseModel):
 class ModelConfig(_Section):
     path: Path = Path("models/model.onnx")
     url: HttpUrl | None = None  # CI downloads the model from here to `path`
+    # CI fails the download if the file's SHA-256 differs
+    sha256: str | None = Field(None, pattern=r"^[0-9a-fA-F]{64}$")
     task: Literal["detection"] = "detection"
     input_size: tuple[int, int] = (640, 640)
     channel_order: Literal["RGB", "BGR"] = "RGB"
     normalize: bool = True
+    # per-channel, applied after normalize, in the model's channel order
+    mean: tuple[float, float, float] | None = None
+    std: tuple[float, float, float] | None = None
     labels: list[str] = Field(default_factory=list)
+
+    @field_validator("std")
+    @classmethod
+    def std_not_zero(cls, v):
+        if v is not None and any(x == 0 for x in v):
+            raise ValueError("values must be non-zero")
+        return v
 
     @field_validator("path")
     @classmethod

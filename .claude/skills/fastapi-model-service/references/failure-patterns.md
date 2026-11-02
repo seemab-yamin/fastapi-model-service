@@ -38,5 +38,17 @@ Check this file first when debugging. After resolving a new class of failure, ad
 - Likely causes: integration tests running without a live server.
 - First check: integration tests should skip unless a base URL is set.
 
+## Ready, but every prediction returns 500
+- Likely causes: config and model disagree in a way only inference reveals: label count vs class count, or an output layout the postprocessing does not expect.
+- First check: the 500 message, then `/health` `model_io` output shapes against `config.yaml` and `postprocess.py`.
+
+## No errors, but detections are wrong, missing, or mislabeled
+- Likely causes: preprocessing differs from training (color order, scaling, mean/std, resize method, input size), labels in the wrong order, or a threshold set too high or too low.
+- First check: draw the boxes on a known image. Compare the preprocessing with the model card or exporter.
+
+## CI fails at the model download
+- Likely causes: the URL is a web page, not a direct file link; the upstream file changed and no longer matches the pinned checksum; the model path is outside the directory the image copies.
+- First check: the `::error::` line in the download step names the source of the URL and checksum.
+
 ## Adding new patterns
 Describe the symptom class and the first check. Keep it general. If a specific incident repeats across two projects, promote it here.

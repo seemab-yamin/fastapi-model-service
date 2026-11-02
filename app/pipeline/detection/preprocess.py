@@ -87,12 +87,21 @@ def letterbox(
 
 
 def to_tensor(
-    canvas: np.ndarray, layout: str, channel_order: str, normalize: bool
+    canvas: np.ndarray,
+    layout: str,
+    channel_order: str,
+    normalize: bool,
+    mean: tuple[float, float, float] | None = None,
+    std: tuple[float, float, float] | None = None,
 ) -> np.ndarray:
     arr = canvas[..., ::-1] if channel_order == "BGR" else canvas
     arr = arr.astype(np.float32)
     if normalize:
         arr = arr / 255.0
+    if mean is not None:
+        arr = arr - np.asarray(mean, dtype=np.float32)
+    if std is not None:
+        arr = arr / np.asarray(std, dtype=np.float32)
     if layout == "NCHW":
         arr = arr.transpose(2, 0, 1)
     return np.ascontiguousarray(arr)[None]

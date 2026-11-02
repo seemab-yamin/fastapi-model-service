@@ -43,3 +43,24 @@ def test_model_url_optional(tmp_path):
 def test_rejects_bad_model_url(tmp_path):
     with pytest.raises(ConfigError, match="model.url"):
         load_config(write(tmp_path, "model:\n  url: not-a-url\n"))
+
+
+def test_mean_std_optional_and_validated(tmp_path):
+    s = load_config(write(tmp_path, ""))
+    assert s.model.mean is None and s.model.std is None
+    s = load_config(
+        write(tmp_path, "model:\n  mean: [0.485, 0.456, 0.406]\n  std: [0.229, 0.224, 0.225]\n")
+    )
+    assert s.model.std == (0.229, 0.224, 0.225)
+    with pytest.raises(ConfigError, match="model.mean"):
+        load_config(write(tmp_path, "model:\n  mean: [0.5, 0.5]\n"))
+    with pytest.raises(ConfigError, match="model.std"):
+        load_config(write(tmp_path, "model:\n  std: [0.2, 0, 0.2]\n"))
+
+
+def test_model_sha256_optional_and_validated(tmp_path):
+    assert load_config(write(tmp_path, "")).model.sha256 is None
+    h = "a" * 64
+    assert load_config(write(tmp_path, f"model:\n  sha256: {h}\n")).model.sha256 == h
+    with pytest.raises(ConfigError, match="model.sha256"):
+        load_config(write(tmp_path, "model:\n  sha256: abc123\n"))
