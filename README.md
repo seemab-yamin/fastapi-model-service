@@ -2,15 +2,16 @@
 
 A template for serving an ML model as a REST API. It includes a FastAPI server, Docker image, GitHub Actions CI, tests, and an AI skill that guides code generation.
 
-The template ships with a stock YOLOv8s object detector so it works with zero edits. Swap in any other model by changing a few files.
+It serves any ONNX model through a config-driven task pipeline. Out of the box, `config.yaml` points at a YOLOv8n object detector (`model.url`), which CI downloads and bakes into the image. Swap in another model by editing `config.yaml` and, if its input or output layout differs, the pipeline's pre- and postprocessing.
 
 ## What you get
 
-- FastAPI server that loads the model once at startup
+- FastAPI server that loads the model once at startup and never crashes on bad setup: problems are listed in `/health`
+- Task pipeline registry (`app/pipeline/`) with a YOLOv8-style detection reference, on a task-agnostic ONNX runtime
 - `/predict` endpoint with input validation and a typed response
 - `/health` (info) and `/ping` (readiness) endpoints
-- Dockerfile with model weights baked in at build time
-- GitHub Actions: unit tests, build, integration tests against the live container, push
+- Dockerfile that bakes the model into the image at build time (CI downloads it into `models/` first)
+- GitHub Actions: unit tests, model download, build, integration tests against the live container, push
 - Images tagged with the commit SHA and `latest`
 - Unit tests and integration tests (integration tests skip unless `BASE_URL` is set)
 - A `SKILL.md` that tells an AI coding assistant how to adapt the template safely
@@ -24,26 +25,39 @@ The template ships with a stock YOLOv8s object detector so it works with zero ed
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-3. Run the server:
+3. Download the model to `model.path` (models are not committed to git):
+
+```bash
+curl -fL -o models/yolov8n.onnx https://huggingface.co/Kalray/yolov8/resolve/main/yolov8n.onnx
+```
+
+4. Run the server:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-4. Open `http://localhost:8000/docs` and try `/predict` with an image.
-5. Run the tests:
+5. Open `http://localhost:8000/docs` and try `/predict` with an image.
+6. Run the tests (no model file needed):
 
 ```bash
 pytest tests/unit -v
 ```
 
+Without a model file the server still starts: `/ping` and `/predict` return 503, and `/health` lists what to fix. See `docs/first-time-setup.md`.
+
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | Liveness and info. Returns 200 when the process is up, with `status`, `model_loaded`, and the model name. |
+| GET | `/health` | Liveness and info. Returns 200 when the process is up, with `status`, `model_loaded`, `model_path`, `model_io` (real input and output shapes), and `setup_errors`. |
 | GET | `/ping` | Readiness. Returns 503 until the model is loaded, then 200. Point platform health checks here. |
 | POST | `/predict` | Runs the model on an uploaded image (`multipart/form-data`, field `file`) and returns JSON. |
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/ping
+```
 
 ### `/predict`
 
@@ -81,18 +95,25 @@ Response:
 
 ```
 app/
-  main.py          # lifespan, app.state, router registration
-  config.py        # model name, path, limits
+  main.py          # lifespan, app.state, setup_errors, router registration
+  config.py        # loads and validates config.yaml (unknown keys rejected)
   routers/         # thin HTTP layer (health.py, predict.py)
-  services/        # model loading and inference logic
+  pipeline/        # task registry: base.py, detection/ (preprocess.py, postprocess.py)
+  services/        # onnx_runtime.py: task-agnostic ONNX model wrapper
   schemas/         # request and response models
-  utils/           # shared helpers
+  utils/           # upload and image validation helpers
+config.yaml        # model and inference settings
+models/            # .onnx goes here (git keeps only .gitkeep)
+optional/annotate/ # opt-in /annotate route (not in the image until copied into app/)
 tests/
-  unit/            # run on every push
-  integration/     # run against a live container
+  unit/            # run on every push, no model needed
+  integration/     # run against a live container, skip unless BASE_URL is set
+docs/first-time-setup.md
 Dockerfile
-requirements.txt
-.github/workflows/deploy.yml
+.dockerignore
+requirements.txt       # runtime dependencies
+requirements-dev.txt   # test tools
+.github/workflows/ci.yml
 .claude/skills/fastapi-model-service/
   SKILL.md
   references/
@@ -100,25 +121,50 @@ requirements.txt
 
 ## Configuration
 
+Settings live in `config.yaml`. Each key is commented there, and unknown keys are rejected so typos fail loudly.
+
+| Key | Default in template | Meaning |
+|---|---|---|
+| `model.path` | `models/yolov8n.onnx` | Where the app loads the model. Must be under `models/` for the image |
+| `model.url` | YOLOv8n on Hugging Face | Direct link CI downloads to `model.path`. The app never downloads it |
+| `model.task` | `detection` | Pipeline to use from `app/pipeline/` |
+| `model.input_size` | `[640, 640]` | Height, width. Used only if the model input is dynamic |
+| `model.channel_order` | `RGB` | `RGB` or `BGR` |
+| `model.normalize` | `true` | Divide pixel values by 255 |
+| `model.labels` | 80 COCO names | Class names in model order |
+| `inference.providers` | `[CPUExecutionProvider]` | ONNX Runtime execution providers |
+| `inference.confidence_threshold` | `0.25` | Minimum score to keep a detection |
+| `inference.iou_threshold` | `0.45` | NMS overlap threshold |
+| `inference.max_upload_mb` | `10` | `/predict` rejects larger uploads with 413 |
+
+Environment variables:
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `8000` | Port the server listens on |
-| `MODEL_NAME` | `yolov8s.pt` | Model file or identifier to load |
+| `PORT` | `8000` | Port the server listens on in the container |
+| `CONFIG_PATH` | `config.yaml` | Path to the config file |
 
 Secrets (API keys, registry tokens) come from env vars or CI secrets. Never commit them and never bake them into the image.
 
 ## Swap in a different model
 
-Change only these files:
+Change only these:
 
-- `app/services/inference_service.py`: load and run the model
-- `app/schemas/`: request and response shapes
-- `app/config.py`: model name and path
-- `requirements.txt`: pinned, minimal dependencies
-- `Dockerfile`: the weight download line only
-- `tests/`: update tests and assets to match the new output
+- `config.yaml`: `model.path`, `model.url`, `model.labels`, `model.input_size`, `model.channel_order`, `model.normalize`, thresholds
+- `app/pipeline/<task>/preprocess.py`: if the model's input handling differs (resize, color order, scaling)
+- `app/pipeline/<task>/postprocess.py`: if the output layout differs from YOLOv8 (`(1, 4+classes, N)`)
+- `app/schemas/`: only if the response shape changes
+- `tests/`: update tests and fakes to match
 
-Do not change the lifespan loading, the `app.state` pattern, the readiness logic, or the workflow job order unless you have a clear reason.
+Check `/health` `model_io` to see the model's real input and output shapes. For a new task type (NLP, tabular), see "Adding a new task" in `docs/first-time-setup.md`.
+
+Do not change the lifespan loading, the setup-errors flow, `app/services/onnx_runtime.py`, the readiness logic, or the workflow step order unless you have a clear reason.
+
+## Optional features
+
+`optional/` holds opt-in code that is not part of the core service or the Docker image:
+
+- `optional/annotate/`: a `/annotate` route that streams the uploaded image back with boxes drawn on it. See its README to enable it.
 
 ## Use the AI skill
 
@@ -127,7 +173,7 @@ The skill lives in `.claude/skills/fastapi-model-service/`. Open the repo root i
 Example prompts:
 
 - "Adapt this template to serve a ViT image classifier. Return the top 5 labels with scores."
-- "Add an `/annotate` endpoint that draws boxes on the image."
+- "Enable the optional `/annotate` endpoint from `optional/annotate/`."
 - "The container keeps restarting after deploy. Help me debug it."
 
 After the AI finishes, review the diff. It should touch only the swap points. If it edits the lifespan code or the workflow, reject the change and tighten the wording in `SKILL.md`.
@@ -169,6 +215,8 @@ Registry settings go under **Settings > Secrets and variables > Actions**:
 
 The job summary lists each stage's result, where the model came from, and why any stage was skipped.
 
+The Docker Hub image name is `<DOCKERHUB_USERNAME>/<GitHub repo name>`, lowercased. Docker Hub creates the repository on the first push (public unless your account default is private). The token needs Read & Write access.
+
 CI stops once the image is pushed. Deploying to a platform is a per-project step.
 
 ## Deploy
@@ -191,4 +239,4 @@ In short:
 
 ## License
 
-MIT. See `LICENSE`. The default model (`hustvl/yolos-tiny`) and `transformers` are Apache-2.0. Check the license of any model you swap in.
+MIT. See `LICENSE`. The default model is Ultralytics YOLOv8n, which Ultralytics releases under AGPL-3.0. Check the model card and the license of any model you swap in.

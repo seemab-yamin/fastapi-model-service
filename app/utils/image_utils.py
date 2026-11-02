@@ -1,5 +1,4 @@
 import io
-from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
@@ -70,15 +69,6 @@ def decode_image(image_bytes: bytes) -> Image.Image:
     return image
 
 
-def pil_image_to_bytes(image: Image.Image, fmt: str = "JPEG") -> bytes:
-    """
-    Serialize a PIL Image back to bytes (useful for saving annotated output).
-    """
-    buffer = io.BytesIO()
-    image.save(buffer, format=fmt)
-    return buffer.getvalue()
-
-
 def validate_image_dimensions(
     image: Image.Image,
     min_side: int = MIN_SIDE_PX,
@@ -97,34 +87,4 @@ def validate_image_dimensions(
         raise HTTPException(
             status_code=400,
             detail=f"Image too large ({width}x{height}). Max side: {max_side}px.",
-        )
-
-
-def annotate_image(image, detections):
-    """
-    Draw boxes and labels from a PredictResponse onto the image.
-    """
-    from PIL import ImageDraw, ImageFont
-
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-
-    for det in detections.detections:
-        x1, y1, x2, y2 = det.bbox
-        draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
-        label = f"{det.class_} ({det.confidence:.2f})"
-        draw.text((x1, y1 - 10), label, fill="red", font=font)
-
-    return image
-
-
-def save_image(image: Image.Image, dir_path: Path, file_name: str):
-    try:
-        image_path = dir_path / file_name
-        image.save(image_path)
-        return image_path
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save image: {str(e)}",
         )

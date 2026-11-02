@@ -47,14 +47,9 @@ class InferenceConfig(_Section):
     max_upload_mb: int = Field(10, gt=0)
 
 
-class StorageConfig(_Section):
-    save_dir: Path = Path("static/saved_dir")
-
-
 class Settings(_Section):
     model: ModelConfig = ModelConfig()
     inference: InferenceConfig = InferenceConfig()
-    storage: StorageConfig = StorageConfig()
 
 
 def load_config(path: Path = CONFIG_PATH) -> Settings:

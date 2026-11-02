@@ -3,7 +3,7 @@
 Platform-agnostic requirements for deploying a model service built from this template. Platform-specific quirks belong in the project's README, not here.
 
 ## Scope
-- CI builds, tests, and pushes the image to a registry, then stops.
+- CI downloads the model, builds, tests, and pushes the image to a registry, then stops.
 - Deploying the image to a platform is a per-project step.
 
 ## Port
@@ -11,13 +11,15 @@ Platform-agnostic requirements for deploying a model service built from this tem
 - The port comes from the `PORT` env var, default `8000`.
 
 ## Health endpoints
-- `/health` (liveness and info): returns 200 whenever the process is up, with status, model_loaded, and model name. For humans and monitoring.
+- `/health` (liveness and info): returns 200 whenever the process is up, with status, model_loaded, model path, model I/O, and setup_errors. For humans and monitoring.
 - `/ping` (readiness): returns 503 until the model is loaded, then 200. Platform health checks and load balancers target this.
 - Do not merge them. A single endpoint either reports errors during normal startup or routes traffic before the model is ready.
 - If a platform requires a different health path, add an alias route in that project. Do not rename the template's routes.
 
 ## Image
 - Bake model weights into the image at build time.
+- Models are not committed to git. CI downloads `model.url` from `config.yaml` with `wget` into `model.path` under `models/`, checks the file, then builds. The Dockerfile itself downloads nothing.
+- `model.url` must be a direct, public file link. Authenticated downloads are out of scope.
 - Keep secrets out of the image.
 - Tag every build with the commit SHA and `latest`.
 - Deploy using the pinned SHA tag, not `latest`.

@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 
 from app.config import ConfigError, load_config
 from app.pipeline import PipelineError, build_pipeline
-from app.routers import download, health, predict
+from app.routers import health, predict
 from app.services.onnx_runtime import ModelLoadError, load_model
 
 
@@ -50,7 +50,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Model Service API", lifespan=lifespan)
 app.include_router(health.router)
-app.include_router(download.router)
 app.include_router(predict.router)
 
 
