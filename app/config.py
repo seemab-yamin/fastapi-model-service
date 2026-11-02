@@ -3,7 +3,14 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationError,
+    field_validator,
+)
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 
@@ -18,6 +25,7 @@ class _Section(BaseModel):
 
 class ModelConfig(_Section):
     path: Path = Path("models/model.onnx")
+    url: HttpUrl | None = None  # CI downloads the model from here to `path`
     task: Literal["detection"] = "detection"
     input_size: tuple[int, int] = (640, 640)
     channel_order: Literal["RGB", "BGR"] = "RGB"

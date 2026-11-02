@@ -3,6 +3,7 @@
 
 model:
   path: models/yolov8n.onnx      # put your .onnx file here
+  url: https://huggingface.co/Kalray/yolov8/resolve/main/yolov8n.onnx  # direct link. CI downloads it to path. Remove if you add the file yourself
   task: detection              # only "detection" is supported for now
   input_size: [640, 640]       # height, width. Used only if the model input is dynamic
   channel_order: RGB           # RGB or BGR

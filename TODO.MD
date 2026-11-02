@@ -7,4 +7,5 @@ curl -L -C - -o resnet18-v1-7.onnx "https://media.githubusercontent.com/media/on
 
 
 
+curl -L -C - -o yolov8n.onnx https://huggingface.co/Kalray/yolov8/resolve/main/yolov8n.onnx
 curl -L -C - -o yolov8n.onnx "https://hf-mirror.com/Kalray/yolov8/resolve/main/yolov8n.onnx"

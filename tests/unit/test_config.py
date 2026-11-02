@@ -32,3 +32,14 @@ def test_rejects_unknown_key(tmp_path):
 def test_rejects_bad_threshold(tmp_path):
     with pytest.raises(ConfigError, match="confidence_threshold"):
         load_config(write(tmp_path, "inference:\n  confidence_threshold: 2\n"))
+
+
+def test_model_url_optional(tmp_path):
+    assert load_config(write(tmp_path, "")).model.url is None
+    s = load_config(write(tmp_path, "model:\n  url: https://example.com/m.onnx\n"))
+    assert str(s.model.url) == "https://example.com/m.onnx"
+
+
+def test_rejects_bad_model_url(tmp_path):
+    with pytest.raises(ConfigError, match="model.url"):
+        load_config(write(tmp_path, "model:\n  url: not-a-url\n"))

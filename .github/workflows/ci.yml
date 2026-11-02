@@ -2,15 +2,17 @@
 # integration tests against the running container, and push to Docker Hub.
 # CI ends once the image is pushed. Deploying is a per-project step.
 #
-# Configuration (Settings > Secrets and variables > Actions):
-# | Name               | Kind                | Purpose                                  |
-# |--------------------|---------------------|------------------------------------------|
-# | MODEL_URL          | repository variable | Direct download link to the .onnx file   |
-# | DOCKERHUB_USERNAME | secret              | Registry username                        |
-# | DOCKERHUB_TOKEN    | secret              | Registry access token                    |
+# The model comes from config.yaml: CI downloads model.url to model.path.
 #
-# Nothing configured: unit tests only, run is green, the job summary says what to set.
-# MODEL_URL only: also download, build, and integration tests. Push is skipped.
+# Configuration (Settings > Secrets and variables > Actions):
+# | Name               | Kind                | Purpose                                          |
+# |--------------------|---------------------|--------------------------------------------------|
+# | MODEL_URL          | repository variable | Optional. Overrides model.url from config.yaml   |
+# | DOCKERHUB_USERNAME | secret              | Registry username                                |
+# | DOCKERHUB_TOKEN    | secret              | Registry access token                            |
+#
+# No model URL anywhere: unit tests only, run is green, the job summary says what to set.
+# Model URL, no registry secrets: also download, build, and integration tests. Push is skipped.
 # Everything set, push to main: full run, image pushed as <user>/<repo>:<sha> and :latest.
 # Pull requests never push.
 
@@ -32,9 +34,9 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     env:
-      HAS_MODEL: ${{ vars.MODEL_URL != '' }}
+      # HAS_MODEL is set by the "Resolve model" step, since it needs config.yaml
       HAS_REGISTRY: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
-      SHOULD_PUSH: ${{ vars.MODEL_URL != '' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      CAN_PUSH: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       CONTAINER: model-service
       SHA: ${{ github.sha }}
 
@@ -56,45 +58,61 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
           pytest tests/unit -v
 
+      # Reads model.url and model.path from config.yaml. The MODEL_URL
+      # repository variable, when set, overrides model.url.
+      - name: Resolve model
+        id: model
+        env:
+          MODEL_URL_OVERRIDE: ${{ vars.MODEL_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys, urllib.parse, yaml
+
+          model = (yaml.safe_load(open("config.yaml")) or {}).get("model") or {}
+          path = str(model.get("path", "models/model.onnx"))
+          override = os.environ.get("MODEL_URL_OVERRIDE", "").strip()
+          url = override or str(model.get("url") or "").strip()
+          source = "repository variable MODEL_URL" if override else "model.url in config.yaml"
+
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              if not url:
+                  env.write("HAS_MODEL=false\n")
+                  print("No model URL: set model.url in config.yaml. Build and integration tests will be skipped.")
+                  sys.exit(0)
+              if "\n" in url:
+                  sys.exit(f"::error::Check {source}: it must be a single-line URL.")
+              print(f"::add-mask::{url}")
+              if not path.startswith("models/"):
+                  sys.exit(f"::error::model.path in config.yaml is '{path}'. The Dockerfile "
+                           "only copies models/, so model.path must start with models/.")
+              env.write(f"HAS_MODEL=true\nMODEL_PATH={path}\nMODEL_URL={url}\nMODEL_SOURCE={source}\n")
+          print(f"Model {path} from {source} (host {urllib.parse.urlparse(url).hostname or 'invalid URL'})")
+          PY
+
       - name: Download model
         id: download
         if: env.HAS_MODEL == 'true'
-        env:
-          MODEL_URL: ${{ vars.MODEL_URL }}
         run: |
           set -euo pipefail
-          echo "::add-mask::$MODEL_URL"
-
-          # Download to the path the app reads (model.path in config.yaml)
-          MODEL_PATH=$(python -c 'import yaml; c = yaml.safe_load(open("config.yaml")) or {}; print((c.get("model") or {}).get("path", "models/model.onnx"))')
-          case "$MODEL_PATH" in
-            models/*) ;;
-            *)
-              echo "::error::model.path in config.yaml is '$MODEL_PATH'. The Dockerfile only copies models/, so model.path must start with models/."
-              exit 1 ;;
-          esac
-
-          MODEL_HOST=$(python -c 'import os, urllib.parse; print(urllib.parse.urlparse(os.environ["MODEL_URL"]).hostname or "invalid URL")')
-          echo "Downloading model from host $MODEL_HOST to $MODEL_PATH"
-
+          echo "Downloading to $MODEL_PATH"
           mkdir -p "$(dirname "$MODEL_PATH")"
           if ! wget -nv --tries=3 --timeout=60 -O "$MODEL_PATH" "$MODEL_URL"; then
-            echo "::error::Model download failed. Check the repository variable MODEL_URL: it must be a public, direct download link to the .onnx file."
+            echo "::error::Model download failed. Check $MODEL_SOURCE: it must be a public, direct download link to the .onnx file."
             exit 1
           fi
 
           SIZE=$(stat -c %s "$MODEL_PATH")
           if [ "$SIZE" -lt 1024 ]; then
-            echo "::error::Downloaded file is only $SIZE bytes, not a model. Check the repository variable MODEL_URL: it likely points to a web page or error page instead of the .onnx file."
+            echo "::error::Downloaded file is only $SIZE bytes, not a model. Check $MODEL_SOURCE: it likely points to an error page instead of the .onnx file."
             exit 1
           fi
           # process substitution, not a pipe: with pipefail, grep -q exiting early can mask a match
           if LC_ALL=C grep -aqiE '<!doctype html|<html' <(head -c 1024 "$MODEL_PATH"); then
-            echo "::error::Downloaded file is an HTML page, not a model. Check the repository variable MODEL_URL: use the direct file link (for example a Hugging Face resolve/main/... URL), not the page that shows the file."
+            echo "::error::Downloaded file is an HTML page, not a model. Check $MODEL_SOURCE: use the direct file link (for example a Hugging Face resolve/main/... URL), not the page that shows the file."
             exit 1
           fi
           echo "Model downloaded: $SIZE bytes"
-          echo "MODEL_PATH=$MODEL_PATH" >> "$GITHUB_ENV"
 
       - name: Build image
         id: build
@@ -155,7 +173,7 @@ jobs:
           docker rm "$CONTAINER" > /dev/null 2>&1 || true
 
       - name: Log in to Docker Hub
-        if: env.SHOULD_PUSH == 'true'
+        if: env.HAS_MODEL == 'true' && env.CAN_PUSH == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -163,7 +181,7 @@ jobs:
 
       - name: Push image
         id: push
-        if: env.SHOULD_PUSH == 'true'
+        if: env.HAS_MODEL == 'true' && env.CAN_PUSH == 'true'
         run: |
           set -euo pipefail
           docker push "$IMAGE:$SHA"
@@ -176,6 +194,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           UNIT: ${{ steps.unit.outcome }}
+          MODEL: ${{ steps.model.outcome }}
           DOWNLOAD: ${{ steps.download.outcome }}
           BUILD: ${{ steps.build.outcome }}
           INTEGRATION: ${{ steps.integration.outcome }}
@@ -188,14 +207,18 @@ jobs:
             echo "| Stage | Result |"
             echo "|---|---|"
             echo "| Unit tests | ${UNIT:-not run} |"
+            echo "| Resolve model | ${MODEL:-not run} |"
             echo "| Download model | ${DOWNLOAD:-not run} |"
             echo "| Build image | ${BUILD:-not run} |"
             echo "| Integration tests | ${INTEGRATION:-not run} |"
             echo "| Push image | ${PUSH:-not run} |"
             echo
 
-            if [ "$HAS_MODEL" != "true" ]; then
-              echo "- Build and integration tests skipped: repository variable MODEL_URL is not set. Set it to a direct download link to your .onnx file (Settings > Secrets and variables > Actions > Variables)."
+            HAS_MODEL="${HAS_MODEL:-false}"
+            if [ "$HAS_MODEL" = "true" ]; then
+              echo "- Model: \`$MODEL_PATH\` from $MODEL_SOURCE."
+            elif [ "${MODEL:-}" = "success" ]; then
+              echo "- Build and integration tests skipped: model.url is not set in config.yaml. Set it to a direct download link to your .onnx file."
             fi
 
             if [ "$EVENT" = "pull_request" ]; then
@@ -205,7 +228,7 @@ jobs:
             elif [ "$HAS_REGISTRY" != "true" ]; then
               echo "- Push skipped: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are not set (both are required)."
             elif [ "$HAS_MODEL" != "true" ]; then
-              echo "- Push skipped: no image was built because MODEL_URL is not set."
+              echo "- Push skipped: no image was built because model.url is not set in config.yaml."
             fi
 
             if [ -n "${PUSHED:-}" ]; then
